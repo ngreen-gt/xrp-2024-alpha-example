@@ -61,7 +61,7 @@ wpi.sim.addDriverstation()
 // wpi.sim.envVar("HALSIMWS_FILTERS", "DriverStation")
 // wpi.sim.addWebsocketsClient().defaultEnabled = true
 
-wpi.sim.envVar("HALSIMXRP_HOST", "127.0.0.1");
+wpi.sim.envVar("HALSIMXRP_HOST", "192.168.42.1");
 // wpi.sim.addXRPClient().defaultEnabled = true
 
 wpi.sim.addDep("Sim XRP Client", "edu.wpi.first.halsim", "halsim_xrp").defaultEnabled = true;

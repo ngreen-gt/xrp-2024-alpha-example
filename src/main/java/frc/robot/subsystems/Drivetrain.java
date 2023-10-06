@@ -4,37 +4,40 @@
 
 package frc.robot.subsystems;
 
+import java.util.function.DoubleSupplier;
+
+import com.pathplanner.lib.PathPlannerTrajectory;
+import com.pathplanner.lib.commands.PPRamseteCommand;
+
+import edu.wpi.first.math.controller.PIDController;
+import edu.wpi.first.math.controller.RamseteController;
+import edu.wpi.first.math.controller.SimpleMotorFeedforward;
+import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.kinematics.DifferentialDriveOdometry;
+import edu.wpi.first.math.kinematics.DifferentialDriveWheelSpeeds;
 import edu.wpi.first.wpilibj.BuiltInAccelerometer;
 import edu.wpi.first.wpilibj.Encoder;
 import edu.wpi.first.wpilibj.drive.DifferentialDrive;
 import edu.wpi.first.wpilibj.xrp.XRPGyro;
 import edu.wpi.first.wpilibj.xrp.XRPMotor;
+import edu.wpi.first.wpilibj2.command.Command;
+import edu.wpi.first.wpilibj2.command.Commands;
+import edu.wpi.first.wpilibj2.command.InstantCommand;
+import edu.wpi.first.wpilibj2.command.SequentialCommandGroup;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
+import frc.robot.Constants.DriveConstants;
 
 public class Drivetrain extends SubsystemBase {
-  private static final double kGearRatio =
-      (30.0 / 14.0) * (28.0 / 16.0) * (36.0 / 9.0) * (26.0 / 8.0); // 48.75:1
-  private static final double kCountsPerMotorShaftRev = 12.0;
-  private static final double kCountsPerRevolution = kCountsPerMotorShaftRev * kGearRatio; // 585.0
-  private static final double kWheelDiameterInch = 2.3622; // 60 mm
+  private final XRPMotor m_leftMotor = new XRPMotor(DriveConstants.kLeftMotorPort);
+  private final XRPMotor m_rightMotor = new XRPMotor(DriveConstants.kRightMotorPort);
+  private final DifferentialDrive m_drive = new DifferentialDrive(m_leftMotor, m_rightMotor);
 
-  // The XRP has the left and right motors set to
-  // channels 0 and 1 respectively
-  private final XRPMotor m_leftMotor = new XRPMotor(0);
-  private final XRPMotor m_rightMotor = new XRPMotor(1);
+  private final Encoder m_leftEncoder = new Encoder(DriveConstants.kLeftEncoderPorts[0], DriveConstants.kLeftEncoderPorts[1]);
+  private final Encoder m_rightEncoder = new Encoder(DriveConstants.kRightEncoderPorts[0],DriveConstants.kRightEncoderPorts[1]);
+  private final DifferentialDriveOdometry m_odometry;
 
-  // The XRP has onboard encoders that are hardcoded
-  // to use DIO pins 4/5 and 6/7 for the left and right
-  private final Encoder m_leftEncoder = new Encoder(4, 5);
-  private final Encoder m_rightEncoder = new Encoder(6, 7);
-
-  // Set up the differential drive controller
-  private final DifferentialDrive m_diffDrive = new DifferentialDrive(m_leftMotor, m_rightMotor);
-
-  // Set up the XRPGyro
   private final XRPGyro m_gyro = new XRPGyro();
-
-  // Set up the BuiltInAccelerometer
   private final BuiltInAccelerometer m_accelerometer = new BuiltInAccelerometer();
 
   /** Creates a new Drivetrain. */
@@ -45,15 +48,24 @@ public class Drivetrain extends SubsystemBase {
     m_rightMotor.setInverted(true);
 
     // Use inches as unit for encoder distances
-    m_leftEncoder.setDistancePerPulse((Math.PI * kWheelDiameterInch) / kCountsPerRevolution);
-    m_rightEncoder.setDistancePerPulse((Math.PI * kWheelDiameterInch) / kCountsPerRevolution);
+    m_leftEncoder.setDistancePerPulse(DriveConstants.kEncoderDistancePerPulse);
+    m_rightEncoder.setDistancePerPulse(DriveConstants.kEncoderDistancePerPulse);
     resetEncoders();
+
+    m_odometry = new DifferentialDriveOdometry(Rotation2d.fromDegrees(getHeading()), getLeftDistanceInch(), getRightDistanceInch(), new Pose2d());
   }
 
-  public void arcadeDrive(double xaxisSpeed, double zaxisRotate) {
-    m_diffDrive.arcadeDrive(xaxisSpeed, zaxisRotate);
+  public Command arcadeDriveCommand(DoubleSupplier fwd, DoubleSupplier rot) {
+    return run(() -> m_drive.arcadeDrive(fwd.getAsDouble(),rot.getAsDouble()))
+        .withName("arcadeDrive");
   }
 
+  public void tankDriveVolts(double leftVolts, double rightVolts) {
+    m_leftMotor.setVoltage(leftVolts);
+    m_rightMotor.setVoltage(rightVolts);
+    m_drive.feed();
+}
+  
   public void resetEncoders() {
     m_leftEncoder.reset();
     m_rightEncoder.reset();
@@ -138,8 +150,68 @@ public class Drivetrain extends SubsystemBase {
     m_gyro.reset();
   }
 
+  public double getHeading() {
+    return Math.IEEEremainder(m_gyro.getAngle(), 360);
+  }
+
+  public Pose2d getPose() {
+    return m_odometry.getPoseMeters();
+  }
+
+  public void resetOdometry(Pose2d pose) {
+    resetEncoders();
+    resetGyro();
+    m_odometry.resetPosition(Rotation2d.fromDegrees(getHeading()), getLeftDistanceInch(), getRightDistanceInch(), pose);
+  }
+
+  public DifferentialDriveWheelSpeeds getWheelSpeeds() {
+    return new DifferentialDriveWheelSpeeds(m_leftEncoder.getRate(),m_rightEncoder.getRate());
+  } 
+
   @Override
   public void periodic() {
     // This method will be called once per scheduler run
+  }
+
+  public Command driveDistanceCommand(double distanceInches, double speed) {
+    return runOnce(
+      () -> {
+        m_leftEncoder.reset();
+        m_rightEncoder.reset();
+      })
+    // Drive forward at specified speed
+    .andThen(run(() -> m_drive.arcadeDrive(speed, 0)))
+    // End command when we've traveled the specified distance
+    .until(
+      () ->
+           Math.max(m_leftEncoder.getDistance(),m_rightEncoder.getDistance())
+               >= distanceInches)
+    // Stop the drive when the command ends
+    .finallyDo(interrupted -> m_drive.stopMotor());
+  }
+
+  // Assuming this method is part of a drivetrain subsystem that provides the necessary methods
+public Command followTrajectoryCommand(PathPlannerTrajectory traj, boolean isFirstPath) {
+    return Commands.sequence(
+          Commands.none(),
+          //   () -> {
+          // // Reset odometry for the first path you run during auto
+          // if(isFirstPath){
+          //     this.resetOdometry(traj.getInitialPose());
+          // },
+        new PPRamseteCommand(
+            traj, 
+            this::getPose, // Pose supplier
+            new RamseteController(),
+            new SimpleMotorFeedforward(1, 1, 1),
+            DriveConstants.kDriveKinematics, // DifferentialDriveKinematics
+            this::getWheelSpeeds, // DifferentialDriveWheelSpeeds supplier
+            new PIDController(1, 0, 0), // Left controller. Tune these values for your robot. Leaving them 0 will only use feedforwards.
+            new PIDController(1, 0, 0), // Right controller (usually the same values as left controller)
+            this::tankDriveVolts, // Voltage biconsumer
+            false, // Should the path be automatically mirrored depending on alliance color. Optional, defaults to true
+            this // Requires this drive subsystem
+        )
+    );
   }
 }

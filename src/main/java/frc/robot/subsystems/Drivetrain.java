@@ -170,6 +170,7 @@ public class Drivetrain extends SubsystemBase {
 
   @Override
   public void periodic() {
+    m_odometry.update(Rotation2d.fromDegrees(getHeading()), getLeftDistanceInch(), getRightDistanceInch());
     // This method will be called once per scheduler run
   }
 
